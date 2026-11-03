@@ -37,6 +37,7 @@ _LANG_FAMILY: dict[str, str] = {
     **{e: "jvm" for e in (".java", ".kt", ".kts", ".scala")},
     **{e: "c" for e in (".c", ".h", ".cpp", ".cc", ".cxx", ".hpp")},
     **{e: "ruby" for e in (".rb", ".rake")},
+    **{e: "crystal" for e in (".cr",)},
     **{e: "swift" for e in (".swift",)},
     **{e: "dotnet" for e in (".cs", ".vb")},
     **{e: "php" for e in (".php",)},

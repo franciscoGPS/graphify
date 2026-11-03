@@ -2208,6 +2208,7 @@ def _python_collect_assignment_targets(node, source: bytes, out: set[str]) -> No
 _SELF_CALL_LANGUAGES = frozenset({
     "tree_sitter_python", "tree_sitter_javascript", "tree_sitter_typescript",
     "tree_sitter_swift", "tree_sitter_ruby", "tree_sitter_php",
+    "tree_sitter_crystal",
 })
 
 def _self_call_target(
@@ -5873,6 +5874,19 @@ def _ruby_const_full_name(node, source: bytes) -> str:
     return _read_text(node, source).strip()
 
 
+def _crystal_type_name(node, source: bytes) -> str:
+    """``Foo::Bar`` from a Crystal type node, dropping generic args (``Repo(T)`` -> ``Repo``)."""
+    if node is None:
+        return ""
+    if node.type == "constant":
+        return _read_text(node, source).strip()
+    if node.type in ("generic_type", "generic_instance_type"):
+        for child in node.children:
+            if child.type == "constant":
+                return _read_text(child, source).strip()
+    return ""
+
+
 _RUBY_LOOKUP_MUTATORS = frozenset(
     {
         "alias_method",
@@ -6661,6 +6675,8 @@ def _extract_generic(
                 if not synthetic_name:
                     return
             class_name = synthetic_name if synthetic_name else _read_text(name_node, source)
+            if config.ts_module == "tree_sitter_crystal":
+                class_name = _crystal_type_name(name_node, source) or class_name
             ruby_absolute_declaration = (
                 config.ts_module == "tree_sitter_ruby" and class_name.startswith("::")
             )
@@ -6668,7 +6684,7 @@ def _extract_generic(
             # scope, splitting compact `Foo::Bar` names into segments so both
             # declaration styles converge on one `Foo::Bar` label (#2302).
             ruby_segments: list[str] = []
-            if config.ts_module == "tree_sitter_ruby":
+            if config.ts_module in ("tree_sitter_ruby", "tree_sitter_crystal"):
                 ruby_segments = class_name.split("::")
                 class_name = "::".join(ruby_namespace + ruby_segments)
             class_name_for_id = class_name
@@ -7098,6 +7114,23 @@ def _extract_generic(
                                     "source_file": str_path,
                                     "source_location": f"L{_stmt.start_point[0] + 1}",
                                 })
+
+            # Crystal: `superclass` holds the type itself, and `include`/`extend`
+            # are dedicated nodes in the body (Ruby models both as plain calls).
+            if config.ts_module == "tree_sitter_crystal":
+                base = _crystal_type_name(node.child_by_field_name("superclass"), source)
+                if base:
+                    add_edge(class_nid, ensure_named_node(base, line), "inherits", line)
+                _cr_body = _find_body(node, config)
+                for _stmt in _cr_body.children if _cr_body is not None else ():
+                    if _stmt.type not in ("include", "extend"):
+                        continue
+                    _stmt_line = _stmt.start_point[0] + 1
+                    for _arg in _stmt.children:
+                        _mod = _crystal_type_name(_arg, source)
+                        if _mod:
+                            add_edge(class_nid, ensure_named_node(_mod, _stmt_line),
+                                     "mixes_in", _stmt_line)
 
             # C#-specific: inheritance / interface implementation via base_list
             if config.ts_module == "tree_sitter_c_sharp":
@@ -9002,6 +9035,12 @@ def _extract_generic(
                 walk(child, parent_class_nid=parent_class_nid)
             return
 
+        # Crystal `private def x` / `protected def x` wraps the method; not a scope.
+        if t == "visibility_modifier" and config.ts_module == "tree_sitter_crystal":
+            for child in node.children:
+                walk(child, parent_class_nid=parent_class_nid)
+            return
+
         # Default: recurse
         for child in node.children:
             walk(child, parent_class_nid=None)
@@ -9935,7 +9974,7 @@ def _extract_generic(
                                 is_this_field_call = True
                         else:
                             java_receiver_chain = _java_receiver_chain(receiver, source)
-            elif config.ts_module == "tree_sitter_ruby":
+            elif config.ts_module in ("tree_sitter_ruby", "tree_sitter_crystal"):
                 # Ruby's `call` node carries `receiver` and `method` as direct
                 # fields (no intermediate accessor node), so the generic accessor
                 # model doesn't apply. Read them directly and capture a simple

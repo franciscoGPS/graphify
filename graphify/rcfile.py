@@ -53,6 +53,7 @@ LANGUAGE_ALIASES: dict[str, str] = {
     "go": ".go", "golang": ".go",
     "rust": ".rs",
     "ruby": ".rb",
+    "crystal": ".cr",
     "csharp": ".cs", "c#": ".cs",
     "swift": ".swift",
     "lua": ".lua",

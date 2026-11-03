@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import importlib.util
 import json
 import os
 import posixpath
@@ -1553,6 +1554,23 @@ _RUBY_CONFIG = LanguageConfig(
     name_fallback_child_types=("constant", "scope_resolution", "identifier"),
     body_fallback_child_types=("body_statement",),
     function_boundary_types=frozenset({"method", "singleton_method"}),
+    sanitize_symbol_name_fn=_ruby_sanitize_method_name,
+)
+
+# Crystal shares Ruby's naming (`Foo::Bar`, `foo?`/`foo!`) and its `call` node
+# shape (`receiver` + `method` fields), so the engine reuses the Ruby branches for
+# those; `require` and `include` get their own (tree-sitter-crystal gives them
+# dedicated node types instead of plain calls).
+_CRYSTAL_FUNCTION_TYPES = frozenset({"method_def", "abstract_method_def", "macro_def"})
+_CRYSTAL_CONFIG = LanguageConfig(
+    ts_module="tree_sitter_crystal",
+    class_types=frozenset({"class_def", "struct_def", "module_def", "enum_def", "lib_def"}),
+    function_types=_CRYSTAL_FUNCTION_TYPES,
+    import_types=frozenset(),
+    call_types=frozenset({"call"}),
+    call_function_field="method",
+    call_accessor_node_types=frozenset(),
+    function_boundary_types=_CRYSTAL_FUNCTION_TYPES,
     sanitize_symbol_name_fn=_ruby_sanitize_method_name,
 )
 
@@ -3433,6 +3451,15 @@ def extract_ruby(path: Path) -> dict:
     return _extract_generic(path, _RUBY_CONFIG)
 
 
+def extract_crystal(path: Path) -> dict:
+    """Extract types, methods, mixins, requires and calls from a .cr file."""
+    if importlib.util.find_spec("tree_sitter_crystal") is None:
+        # Optional [crystal] extra absent: the Ruby grammar still recovers most
+        # classes and methods (what `language.cr=ruby` gave before).
+        return _extract_generic(path, _RUBY_CONFIG)
+    return _extract_generic(path, _CRYSTAL_CONFIG)
+
+
 def _csharp_string_opener(source: bytes, i: int) -> "tuple[int, int, bool, bool]":
     """Read a possible string-literal opener at ``i``.
 
@@ -3861,6 +3888,7 @@ _LANG_FAMILY_BY_EXT: dict[str, str] = {
     ".sol": "solidity",
     ".erl": "erlang", ".hrl": "erlang", ".escript": "erlang",
     ".rb": "ruby", ".rake": "ruby",
+    ".cr": "crystal",
     ".php": "php", ".phtml": "php", ".php3": "php", ".php4": "php",
     ".php5": "php", ".php7": "php", ".phps": "php",
     ".cs": "dotnet", ".vb": "dotnet", ".razor": "dotnet", ".cshtml": "dotnet", ".xaml": "dotnet",
@@ -9235,6 +9263,7 @@ _DISPATCH: dict[str, Any] = {
     ".cuh": extract_cpp,
     ".metal": extract_cpp,
     ".rb": extract_ruby, ".rake": extract_ruby,
+    ".cr": extract_crystal,
     ".cs": extract_csharp,
     ".cbl": extract_cobol,
     ".cob": extract_cobol,
