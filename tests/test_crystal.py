@@ -106,3 +106,45 @@ def test_extract_dispatches_cr_files(tmp_path):
     labels = {n["label"] for n in r["nodes"]}
     assert "Billing::Invoice" in labels
     assert ".total()" in labels
+
+
+def _write(root: Path, rel: str, body: str = "") -> Path:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    return p
+
+
+@needs_crystal
+def test_crystal_require_links_files(tmp_path):
+    app = _write(tmp_path, "src/app.cr", 'require "./models/user"\nrequire "./shared/*"\nrequire "../config/**"\nrequire "./lib"\nrequire "lucky"\n')
+    _write(tmp_path, "src/models/user.cr")
+    _write(tmp_path, "src/shared/a.cr")
+    _write(tmp_path, "src/shared/deep/skipped_by_single_star.cr")
+    _write(tmp_path, "config/server.cr")
+    _write(tmp_path, "config/env/production.cr")
+    _write(tmp_path, "src/lib/lib.cr")
+    r = extract_crystal(app)
+    imports = [e for e in r["edges"] if e["relation"] == "imports"]
+    targets = {Path(e["target_file"]).relative_to(tmp_path.resolve()).as_posix()
+               for e in imports if e.get("target_file")}
+    assert targets == {"src/models/user.cr", "src/lib/lib.cr"}
+    assert any(e["target"] == "lucky" and not e.get("target_file") for e in imports)
+
+
+@needs_crystal
+def test_crystal_glob_requires_add_no_edges(tmp_path):
+    """`require "./models/**"` loads every file; an edge per file turned the
+    entry point into a hub holding 72% of a Lucky app's edges, so globs are skipped."""
+    app = _write(tmp_path, "src/app.cr", 'require "./**"\nrequire "./models/*"\n')
+    _write(tmp_path, "src/user.cr")
+    _write(tmp_path, "src/models/invoice.cr")
+    r = extract_crystal(app)
+    assert not [e for e in r["edges"] if e["relation"] == "imports"]
+
+
+@needs_crystal
+def test_crystal_missing_relative_require_adds_no_edge(tmp_path):
+    app = _write(tmp_path, "src/app.cr", 'require "./nope"\n')
+    r = extract_crystal(app)
+    assert not [e for e in r["edges"] if e["relation"] == "imports"]

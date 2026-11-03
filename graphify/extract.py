@@ -1181,6 +1181,42 @@ def _import_c(node, source: bytes, file_nid: str, stem: str, edges: list, str_pa
             break
 
 
+def _crystal_require_target(raw: str, str_path: str) -> Path | None:
+    """The file a relative Crystal `require` loads: `./x` -> x.cr, else x/x.cr."""
+    base = Path(str_path).parent / raw
+    candidates = [base] if base.suffix == ".cr" else [base.with_name(base.name + ".cr"), base / f"{base.name}.cr"]
+    found = next((c for c in candidates if c.is_file()), None)
+    return found.resolve() if found else None
+
+
+def _import_crystal(node, source: bytes, file_nid: str, stem: str, edges: list, str_path: str, scope_stack: list[str] | None = None) -> None:
+    """`require "..."`: a relative path links to the file it loads, anything
+    else (a shard or the stdlib, `require "lucky"`) to a node named after it.
+    Globs (`./models/**`) are skipped: an edge per loaded file made the entry
+    point a hub holding most of the graph's edges."""
+    string = next((c for c in node.children if c.type == "string"), None)
+    if string is None:
+        return
+    raw = _read_text(string, source).strip().strip('"')
+    edge = {
+        "source": file_nid,
+        "relation": "imports",
+        "context": "import",
+        "confidence": "EXTRACTED",
+        "source_file": str_path,
+        "source_location": f"L{node.start_point[0] + 1}",
+        "weight": 1.0,
+    }
+    if not raw.startswith("."):
+        edges.append({**edge, "target": _make_id(raw)})
+        return
+    if raw.endswith(("/*", "/**")):
+        return
+    target = _crystal_require_target(raw, str_path)
+    if target is not None:
+        edges.append({**edge, "target": _make_id(str(target)), "target_file": str(target)})
+
+
 def _import_csharp(node, source: bytes, file_nid: str, stem: str, edges: list, str_path: str, scope_stack: list[str] | None = None) -> None:
     text = _read_text(node, source).strip().rstrip(";")
     if text.startswith("global "):
@@ -1566,7 +1602,8 @@ _CRYSTAL_CONFIG = LanguageConfig(
     ts_module="tree_sitter_crystal",
     class_types=frozenset({"class_def", "struct_def", "module_def", "enum_def", "lib_def"}),
     function_types=_CRYSTAL_FUNCTION_TYPES,
-    import_types=frozenset(),
+    import_types=frozenset({"require"}),
+    import_handler=_import_crystal,
     call_types=frozenset({"call"}),
     call_function_field="method",
     call_accessor_node_types=frozenset(),
